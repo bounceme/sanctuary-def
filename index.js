@@ -281,6 +281,7 @@
   var Unknown = {
     '@@type': 'sanctuary-def/Type',
     type: 'UNKNOWN',
+    arity: NaN,
     validate: Right,
     _test: K(true),
     toString: always('???')
@@ -290,6 +291,7 @@
   var Inconsistent = {
     '@@type': 'sanctuary-def/Type',
     type: 'INCONSISTENT',
+    arity: NaN,
     toString: always('???')
   };
 
@@ -298,6 +300,7 @@
     return {
       '@@type': 'sanctuary-def/Type',
       type: 'VARIABLE',
+      arity: 0,
       name: name,
       validate: Right,
       _test: K(true),
@@ -310,6 +313,7 @@
     var t = {
       '@@type': 'sanctuary-def/Type',
       type: 'NULLARY',
+      arity: 0,
       name: name,
       validate: function(x) {
         return test(x) ? Right(x)
@@ -344,6 +348,7 @@
       var t = {
         '@@type': 'sanctuary-def/Type',
         type: 'UNARY',
+        arity: 1,
         name: name,
         validate: validate,
         _test: testFrom(validate),
@@ -390,6 +395,7 @@
       var t = {
         '@@type': 'sanctuary-def/Type',
         type: 'BINARY',
+        arity: 2,
         name: name,
         validate: validate,
         _test: testFrom(validate),
@@ -437,6 +443,7 @@
     var t = {
       '@@type': 'sanctuary-def/Type',
       type: 'ENUM',
+      arity: 0,
       validate: validate,
       _test: testFrom(validate),
       toString: always('(' + reprs.join(' | ') + ')')
@@ -501,11 +508,36 @@
     var t = {
       '@@type': 'sanctuary-def/Type',
       type: 'RECORD',
+      arity: 0,
       validate: validate,
       _test: testFrom(validate),
       format: format,
       toString: always(format(id, K(id))),
       fields: fields
+    };
+    return t;
+  };
+
+  //  $._UnaryFunction :: (Type, Type) -> Type
+  $._UnaryFunction = function($1, $2) {
+    var format = function(f, f$1, f$2) {
+      return f('(') + f$1(String($1)) + f(' -> ') + f$2(String($2)) + f(')');
+    };
+    var validate = function(x) {
+      return $$typeEq('Function')(x) ?
+        Right(x) :
+        Left({value: x, typePath: [t], propPath: []});
+    };
+    var t = {
+      '@@type': 'sanctuary-def/Type',
+      type: 'FUNCTION',
+      arity: 2,
+      validate: validate,
+      _test: testFrom(validate),
+      format: format,
+      toString: always(format(id, id, id)),
+      $1: $1,
+      $2: $2
     };
     return t;
   };
@@ -780,6 +812,7 @@
         return t1.type === t2.type && t1.name === t2.name &&
                equalTypes(t1.$1, t2.$1, loose);
       case 'BINARY':
+      case 'FUNCTION':
         return t1.type === t2.type && t1.name === t2.name &&
                equalTypes(t1.$1, t2.$1, loose) &&
                equalTypes(t1.$2, t2.$2, loose);
@@ -902,6 +935,47 @@
     return map(values, function(x) {
       return [x, determineActualTypesLoose(env, [x])];
     });
+  };
+
+  var wrapFunction = function(env, name, constraints, expTypes, index, f) {
+    var expType = expTypes[index];
+    return function(input) {
+      var invalidFunctionValue = function(prop, value) {
+        return invalidValue(name,
+                            constraints,
+                            expTypes,
+                            Info(env,
+                                 [value],
+                                 [expType, expType[prop]],
+                                 [prop],
+                                 index));
+      };
+      if (!test(env, expType.$1, input)) {
+        throw invalidFunctionValue('$1', input);
+      }
+      var output = f(input);
+      if (!test(env, expType.$2, output)) {
+        throw invalidFunctionValue('$2', output);
+      }
+      return output;
+    };
+  };
+
+  var wrapHigherOrderFunction = function(env, name, constraints, expTypes, f) {
+    return function() {
+      var args = [];
+      for (var idx = 0; idx < arguments.length; idx += 1) {
+        args.push(expTypes[idx].type === 'FUNCTION' ?
+                    wrapFunction(env,
+                                 name,
+                                 constraints,
+                                 expTypes,
+                                 idx,
+                                 arguments[idx]) :
+                    arguments[idx]);
+      }
+      return f.apply(this, args);
+    };
   };
 
   //  _satisfactoryTypes ::
@@ -1125,21 +1199,17 @@
     return xs.join(' -> ');
   };
 
-  //  isParameterizedType :: Object -> Boolean
-  var isParameterizedType = function(t) {
-    return t.type === 'UNARY' || t.type === 'BINARY';
-  };
-
   //  showType :: Type -> String
   var showType = function(t) {
     var s = String(t);
-    return isParameterizedType(t) ? s.slice(1, -1) : s;
+    return t.arity > 0 && t.type !== 'FUNCTION' ? s.slice(1, -1) : s;
   };
 
   //  showTypeQuoted :: Type -> String
   var showTypeQuoted = function(t) {
+    var s = String(t);
     return LEFT_SINGLE_QUOTATION_MARK +
-           showType(t) +
+           (t.arity > 0 ? s.slice(1, -1) : s) +
            RIGHT_SINGLE_QUOTATION_MARK;
   };
 
@@ -1182,17 +1252,17 @@
         for (idx = types.length - 2; idx >= 0; idx -= 1) {
           var k = propPath[idx];
           t = types[idx];
-          s = t.type === 'UNARY' ?
+          s = t.arity === 1 ?
                 t.format(_, K(s)) :
-              t.type === 'BINARY' && k === '$1' ?
+              t.arity === 2 && k === '$1' ?
                 t.format(_, K(s), _) :
-              t.type === 'BINARY' && k === '$2' ?
+              t.arity === 2 && k === '$2' ?
                 t.format(_, _, K(s)) :
               // else
                 t.format(_, function(k$) { return k$ === k ? K(s) : _; });
         }
 
-        return isParameterizedType(type) ? s.slice(1, -1) : s;
+        return type.arity > 0 && type.type !== 'FUNCTION' ? s.slice(1, -1) : s;
       };
     };
   };
@@ -1218,7 +1288,8 @@
     typeClass,      // :: TypeClass
     info            // :: Info
   ) {
-    var typeVarName = last(info.typePath).name;
+    var expType = last(info.typePath);
+    var typeVarName = expType.name;
     var reprs = chain(toPairs(constraints), function(pair) {
       return map(pair[1], function(tc) {
         var match = tc.name === typeClass.name && pair[0] === typeVarName;
@@ -1243,10 +1314,8 @@
       '1)  ' + map(info.pairs, showValueAndType).join('\n    '),
       '',
       LEFT_SINGLE_QUOTATION_MARK + name + RIGHT_SINGLE_QUOTATION_MARK +
-        ' requires ' + LEFT_SINGLE_QUOTATION_MARK +
-        typeVarName + RIGHT_SINGLE_QUOTATION_MARK +
-        ' to satisfy the ' + typeClass + ' type-class constraint;' +
-        ' the value at position 1 does not.'
+        ' requires ' + showTypeQuoted(expType) + ' to satisfy the ' +
+        typeClass + ' type-class constraint; the value at position 1 does not.'
     ])));
   };
 
@@ -1486,7 +1555,12 @@
                    {},
                    new Array(arity),
                    range(0, arity),
-                   impl);
+                   checkTypes ? wrapHigherOrderFunction(env,
+                                                        name,
+                                                        constraints,
+                                                        expTypes,
+                                                        impl) :
+                                impl);
     };
   };
 
