@@ -828,6 +828,33 @@ describe('def', function() {
     eq(length(vm.runInNewContext('["foo", "bar", "baz"]')), 3);
   });
 
+  it('accommodates circular references', function() {
+    //  id :: a -> a
+    var id = def('id', {}, [a, a], R.identity);
+
+    var x = {name: 'x'};
+    var y = {name: 'y'};
+    x.y = y;
+    y.x = x;
+
+    eq(id(x), x);
+
+    var z = [];
+    z.push(z);
+
+    throws(function() { id(z); },
+           errorEq(TypeError,
+                   'Type-variable constraint violation\n' +
+                   '\n' +
+                   'id :: a -> a\n' +
+                   '      ^\n' +
+                   '      1\n' +
+                   '\n' +
+                   '1)  [<Circular>] :: Array ???\n' +
+                   '\n' +
+                   'Since there is no type of which all the above values are members, the type-variable constraint has been violated.\n'));
+  });
+
   it('supports custom types', function() {
     //  AnonJust :: a -> AnonMaybe a
     var AnonJust = function(x) {
@@ -1711,6 +1738,65 @@ describe('def', function() {
                    '2)  [1, 2, 3] :: Array Number\n' +
                    '\n' +
                    'Since there is no type of which all the above values are members, the type-variable constraint has been violated.\n'));
+
+    //  f :: a -> a -> a -> a
+    var f = def('f', {}, [a, a, a, a], function(x, y, z) { return x; });
+
+    throws(function() { f(Left('abc'), Left(/XXX/)); },
+           errorEq(TypeError,
+                   'Type-variable constraint violation\n' +
+                   '\n' +
+                   'f :: a -> a -> a -> a\n' +
+                   '     ^    ^\n' +
+                   '     1    2\n' +
+                   '\n' +
+                   '1)  Left("abc") :: Either String ???\n' +
+                   '\n' +
+                   '2)  Left(/XXX/) :: Either RegExp ???\n' +
+                   '\n' +
+                   'Since there is no type of which all the above values are members, the type-variable constraint has been violated.\n'));
+
+    throws(function() { f(Right(123), Right(/XXX/)); },
+           errorEq(TypeError,
+                   'Type-variable constraint violation\n' +
+                   '\n' +
+                   'f :: a -> a -> a -> a\n' +
+                   '     ^    ^\n' +
+                   '     1    2\n' +
+                   '\n' +
+                   '1)  Right(123) :: Either ??? Number\n' +
+                   '\n' +
+                   '2)  Right(/XXX/) :: Either ??? RegExp\n' +
+                   '\n' +
+                   'Since there is no type of which all the above values are members, the type-variable constraint has been violated.\n'));
+
+    throws(function() { f(Left('abc'), Right(123), Left(/XXX/)); },
+           errorEq(TypeError,
+                   'Type-variable constraint violation\n' +
+                   '\n' +
+                   'f :: a -> a -> a -> a\n' +
+                   '          ^    ^\n' +
+                   '          1    2\n' +
+                   '\n' +
+                   '1)  Right(123) :: Either ??? Number\n' +
+                   '\n' +
+                   '2)  Left(/XXX/) :: Either RegExp ???\n' +
+                   '\n' +
+                   'Since there is no type of which all the above values are members, the type-variable constraint has been violated.\n'));
+
+    throws(function() { f(Left('abc'), Right(123), Right(/XXX/)); },
+           errorEq(TypeError,
+                   'Type-variable constraint violation\n' +
+                   '\n' +
+                   'f :: a -> a -> a -> a\n' +
+                   '          ^    ^\n' +
+                   '          1    2\n' +
+                   '\n' +
+                   '1)  Right(123) :: Either ??? Number\n' +
+                   '\n' +
+                   '2)  Right(/XXX/) :: Either ??? RegExp\n' +
+                   '\n' +
+                   'Since there is no type of which all the above values are members, the type-variable constraint has been violated.\n'));
   });
 
   it('supports arbitrary nesting of types', function() {
@@ -1835,6 +1921,19 @@ describe('def', function() {
                    '\n' +
                    'Since there is no type of which all the above values are members, the type-variable constraint has been violated.\n'));
 
+    throws(function() { concat([[1, 2, 3], [Right(42), Left('XXX')]]); },
+           errorEq(TypeError,
+                   'Type-variable constraint violation\n' +
+                   '\n' +
+                   'concat :: Array a -> Array a -> Array a\n' +
+                   '                ^\n' +
+                   '                1\n' +
+                   '\n' +
+                   '1)  [1, 2, 3] :: Array Number\n' +
+                   '    [Right(42), Left("XXX")] :: Array (Either String Number)\n' +
+                   '\n' +
+                   'Since there is no type of which all the above values are members, the type-variable constraint has been violated.\n'));
+
     //  concatNested :: [[a]] -> [[a]] -> [[a]]
     var concatNested =
     def('concatNested',
@@ -1923,30 +2022,6 @@ describe('def', function() {
                    '      1\n' +
                    '\n' +
                    '1)  [Left("abc"), 123, 456] :: Array ???\n' +
-                   '\n' +
-                   'Since there is no type of which all the above values are members, the type-variable constraint has been violated.\n'));
-  });
-
-  it('supports values of "foreign" types', function() {
-    //  id :: a -> a
-    var id = def('id', {}, [a, a], R.identity);
-
-    //  x :: Foreign
-    var x = {'@@type': 'my-package/Foreign'};
-
-    eq(id(x), x);
-    eq(id([x]), [x]);
-    eq(id([x, x]), [x, x]);
-
-    throws(function() { id([{'@@type': 'my-package/Foo'}, {'@@type': 'my-package/Bar'}]); },
-           errorEq(TypeError,
-                   'Type-variable constraint violation\n' +
-                   '\n' +
-                   'id :: a -> a\n' +
-                   '      ^\n' +
-                   '      1\n' +
-                   '\n' +
-                   '1)  [{"@@type": "my-package/Foo"}, {"@@type": "my-package/Bar"}] :: Array ???\n' +
                    '\n' +
                    'Since there is no type of which all the above values are members, the type-variable constraint has been violated.\n'));
   });
